@@ -1,7 +1,7 @@
 <?php
 session_start();
 // ▼▼▼ あなただけの秘密のパスワードを設定してください ▼▼▼
-define('ADMIN_PASSWORD', 'nohomeruLOMLOM121630');
+define('ADMIN_PASSWORD', 'いつもの');
 // ▲▲▲ ここまで ▲▲▲
 
 $error_message = '';
