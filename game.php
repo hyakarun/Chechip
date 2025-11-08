@@ -118,6 +118,36 @@ try {
     $dungeons = $dungeons_stmt->fetchAll();
     // --- ▲▲▲ ロジック修正ここまで ▲▲▲ ---
 
+    // (L120)
+    $dungeons = $dungeons_stmt->fetchAll();
+    // --- ▲▲▲ ロジック修正ここまで ▲▲▲
+
+
+    // --- ▼▼▼ (ここから追記) 新規ユーザーでダンジョンが空だった場合の処理 ▼▼▼ ---
+    if (empty($dungeons)) {
+        // player_progress にデータが1件もないか確認
+        $stmt_check = $pdo->prepare("SELECT 1 FROM player_progress WHERE player_id = :player_id LIMIT 1");
+        $stmt_check->bindValue(':player_id', $_SESSION['player_id'], PDO::PARAM_INT);
+        $stmt_check->execute();
+        
+        if ($stmt_check->fetchColumn() === false) {
+            // 本当に1件もデータがない場合のみ、ダンジョンID:1の1Fを付与
+            // (注: データベースに dungeon_id: 1 が存在することが前提です)
+            $stmt_insert = $pdo->prepare(
+                "INSERT INTO player_progress (player_id, dungeon_id, highest_floor) 
+                 VALUES (:player_id, 1, 1)"
+            );
+            $stmt_insert->bindValue(':player_id', $_SESSION['player_id'], PDO::PARAM_INT);
+            $stmt_insert->execute();
+            
+            // ダンジョンリストを再取得
+            $dungeons_stmt->execute();
+            $dungeons = $dungeons_stmt->fetchAll();
+        }
+    }
+    // --- ▲▲▲ (追記ここまで) ▲▲▲ ---
+
+
     // --- レベルに応じた画像を取得 ---
     $stmt_avatar = $pdo->prepare(
         "SELECT avatar_filename FROM avatar_growth_table 
