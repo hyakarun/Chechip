@@ -104,7 +104,8 @@ foreach ($bonus_stats as $key => $value) {
         $final_stats[$key] += $value;
     }
 }
-$player_atk = floor($final_stats['strength'] / 4) + $bonus_stats['atk'];
+
+$player_atk = $final_stats['strength'] + $bonus_stats['atk'];
 $player_div_def = $bonus_stats['def']; 
 $player_sub_def = floor($final_stats['vitality'] / 8); 
 
@@ -144,11 +145,11 @@ $enemy = [
     'name' => $monster_data['name'],
     'hp' => $monster_data['hp'],
     'hp_max' => $monster_data['hp'], 
-    'exp' => $monster_data['exp'],     // ★ expカラムから取得
-    'gold' => $monster_data['gold'],    // ★ goldカラムから取得
-    'image' => $monster_data['image']  // ★ imageカラムから取得
+    'exp' => $monster_data['exp'],
+    'gold' => $monster_data['gold'],
+    'image' => $monster_data['image']
 ];
-$enemy_atk = floor($monster_data['strength'] / 4) + $monster_data['atk'];
+$enemy_atk = $monster_data['strength'] + $monster_data['atk'];
 $enemy_def = $monster_data['def']; 
 
 // --- ▲▲▲ モンスター情報取得ここまで ▲▲▲ ---
@@ -167,9 +168,20 @@ while ($player_current_hp > 0 && $enemy_current_hp > 0) {
     $battle_flow[] = [ 'type' => 'snapshot', 'turn' => $turn, 'player' => $player, 'enemy' => $enemy ];
 
     // プレイヤーの攻撃
-    $base_damage_to_enemy = $player_atk - $enemy_def;
-    $random_factor_enemy = mt_rand(90, 110) / 100; 
-    $randomized_damage_enemy = $base_damage_to_enemy * $random_factor_enemy;
+    // (★ 計算式をプレイヤーへのダメージ計算式と統一)
+    $enemy_div_def = $enemy_def; 
+    $enemy_sub_def = floor($monster_data['vitality'] / 8); 
+
+    // (★ ユーザー指定の計算式: (ATK/2 * (100 - (除算DEFの立方根))% ) - 減算DEF)
+    $base_atk_half = $player_atk / 2;
+    // (除算DEFが100%を超えてダメージがマイナスにならないよう max(0, ...) で調整)
+    // ▼▼▼ 立方根を適用 ▼▼▼
+    $defense_multiplier = max(0, (100 - pow($enemy_div_def, 1/3))) / 100; 
+    // ▲▲▲ 変更点 ▲▲▲
+    $calculated_damage = ($base_atk_half * $defense_multiplier) - $enemy_sub_def;
+    $random_factor_enemy = mt_rand(90, 110) / 100;
+    $randomized_damage_enemy = $calculated_damage * $random_factor_enemy;
+
     if ($player_atk > 0) {
         $damage_to_enemy = max(1, floor($randomized_damage_enemy));
     } else {
@@ -183,11 +195,13 @@ while ($player_current_hp > 0 && $enemy_current_hp > 0) {
     if ($enemy_current_hp <= 0) break; 
 
     // モンスターの反撃
-    $defense_factor = 500; 
-    $denominator = $defense_factor + $player_div_def;
-    if ($denominator <= 0) { $denominator = 1; }
-    $divided_damage = $enemy_atk * ($defense_factor / $denominator);
-    $calculated_damage = $divided_damage - $player_sub_def;
+    // (★ ユーザー指定の計算式: (ATK/2 * (100 - (除算DEFの立方根))% ) - 減算DEF)
+    $base_atk_half = $enemy_atk / 2;
+    // (除算DEFが100%を超えてダメージがマイナスにならないよう max(0, ...) で調整)
+    // ▼▼▼ 立方根を適用 ▼▼▼
+    $defense_multiplier = max(0, (100 - pow($player_div_def, 1/3))) / 100;
+    // ▲▲▲ 変更点 ▲▲▲
+    $calculated_damage = ($base_atk_half * $defense_multiplier) - $player_sub_def;
     $random_factor_player = mt_rand(90, 110) / 100;
     $randomized_damage_player = $calculated_damage * $random_factor_player;
 
@@ -208,7 +222,7 @@ while ($player_current_hp > 0 && $enemy_current_hp > 0) {
 $final_player_hp = $player_current_hp;
 $final_enemy_hp = $enemy_current_hp;
 $final_player_image = $initial_player['avatar_filename'];
-$final_enemy_image = $enemy['image']; // ★ $enemy 配列から画像を取得
+$final_enemy_image = $enemy['image'];
 
 $next_floor_info = null; 
 $battle_log = []; 
@@ -217,8 +231,8 @@ if ($player_current_hp > 0) {
     $result_message = "勝利した！";
     // --- ▼▼▼ 経験値・ゴールド表示 (最重要) ▼▼▼ ---
     $battle_log[] = $enemy['name'] . 'を倒した！';
-    $battle_log[] = $enemy['exp'] . 'の経験値を獲得！'; // ★ $enemy 配列から取得
-    $battle_log[] = $enemy['gold'] . 'Gを獲得！';     // ★ $enemy 配列から取得
+    $battle_log[] = $enemy['exp'] . 'の経験値を獲得！';
+    $battle_log[] = $enemy['gold'] . 'Gを獲得！';
     // --- ▲▲▲ ここまで ▲▲▲ ---
 
     // --- 階層クリア処理 (10階層対応) ---

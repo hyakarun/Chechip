@@ -1,7 +1,7 @@
 <?php
 session_start();
 // ▼▼▼ あなただけの秘密のパスワードを設定してください ▼▼▼
-define('ADMIN_PASSWORD', 'いつもの');
+define('ADMIN_PASSWORD', 'hyakaru6206Cc');
 // ▲▲▲ ここまで ▲▲▲
 
 $error_message = '';

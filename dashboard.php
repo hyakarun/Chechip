@@ -5,7 +5,7 @@ if (!isset($_SESSION['is_admin']) || $_SESSION['is_admin'] !== true) {
     exit();
 }
 
-require_once(__DIR__ . '/../db_connect.php'); // 階層が違うのでパスを修正
+require_once(__DIR__ . '/../db_connect.php'); 
 
 try {
     $pdo = connectDb();
@@ -23,7 +23,13 @@ try {
     </head>
 <body>
     <h1>お知らせ管理</h1>
-    <a href="logout.php">ログアウト</a>
+    
+    <p>
+        <a href="admin_monsters.php">モンスター管理</a> | 
+        <a href="admin_generate_exp.php">経験値テーブル管理</a> | 
+        <a href="admin_drops.php">アイテムドロップ管理</a> | 
+        <a href="logout.php">ログアウト</a>
+    </p>
     <hr>
     <h2>新しいお知らせを追加</h2>
     <form action="add_news.php" method="post">

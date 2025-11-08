@@ -78,7 +78,7 @@ try {
     $player['speed'] = $final_stats['speed'];
     $player['luck'] = $final_stats['luck'];
     $player['charisma'] = $final_stats['charisma'];
-    $atk = floor($player['strength'] / 4) + $bonus_stats['atk']; 
+    $atk = $player['strength'] + $bonus_stats['atk']; 
     $div_def = $bonus_stats['def']; 
     $sub_def = floor($player['vitality'] / 8); 
 
@@ -118,11 +118,6 @@ try {
     $dungeons = $dungeons_stmt->fetchAll();
     // --- ▲▲▲ ロジック修正ここまで ▲▲▲ ---
 
-    // (L120)
-    $dungeons = $dungeons_stmt->fetchAll();
-    // --- ▲▲▲ ロジック修正ここまで ▲▲▲
-
-
     // --- ▼▼▼ (ここから追記) 新規ユーザーでダンジョンが空だった場合の処理 ▼▼▼ ---
     if (empty($dungeons)) {
         // player_progress にデータが1件もないか確認
@@ -160,7 +155,7 @@ try {
     $avatar_filename = $stmt_avatar->fetchColumn();
     if ($avatar_filename === false) {
         $avatar_filename = 'default_avatar.png';
-    }
+    }       
 
 } catch (PDOException $e) { exit('データベースエラー: ' . $e->getMessage()); }
 
@@ -178,18 +173,6 @@ foreach ($player as $key => $value) { $player[$key] = htmlspecialchars((string)$
         h2 { border-bottom: 1px solid #555; padding-bottom: 10px; }
         .profile-summary-container { display: flex; align-items: center; gap: 20px; margin-bottom: 0px; }
         .player-profile img { width: 128px; height: 128px; border: 2px solid #555; background-color: #ffffff; }
-        /* ▼▼▼ スプライトアニメーション用CSS ▼▼▼ */
-        #player-avatar {
-            width: 128px; 
-            height: 128px;
-            background-image: url('images/<?php echo htmlspecialchars($avatar_filename, ENT_QUOTES, 'UTF-8'); ?>');
-            animation: avatar-animation 1s steps(4) infinite;
-        }
-        @keyframes avatar-animation {
-            from { background-position: 0px 0; }
-            to { background-position: -512px 0; }
-        }
-        /* ▲▲▲ アニメーションCSSここまで ▲▲▲ */
         .player-summary { flex: 1; }
         .player-summary h2 { margin-top: 0; }
         .player-summary p { margin: 8px 0; }
@@ -214,7 +197,7 @@ foreach ($player as $key => $value) { $player[$key] = htmlspecialchars((string)$
     <div class="main-content">
         <div class="profile-summary-container">
             <div class="player-profile">
-                <div id="player-avatar"></div>
+                <img src="images/<?php echo htmlspecialchars($avatar_filename, ENT_QUOTES, 'UTF-8'); ?>" alt="アバター">
             </div>
             <div class="player-summary">
                 <h2><?php echo $player['name']; ?></h2>
