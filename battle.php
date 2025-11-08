@@ -18,22 +18,20 @@ if (isset($_POST['next_floor_id'])) {
     // game.phpのプルダウンから「dungeon_id」が送られてきた場合
     $dungeon_id = (int)$_POST['dungeon_id'];
     
-    // DBに接続して、プレイヤーがそのダンジョンで挑戦すべき「階層(floor_id)」を特定します
-    $stmt_progress = $pdo->prepare(
-        "SELECT f.floor_id 
-         FROM player_progress p
-         JOIN dungeon_floors f ON p.dungeon_id = f.dungeon_id AND p.highest_floor = f.floor_number
-         WHERE p.player_id = :player_id AND p.dungeon_id = :dungeon_id"
+    // DBに接続して、そのダンジョンの「1階層目(floor_number=1)」のfloor_idを特定します
+    $stmt_first_floor = $pdo->prepare(
+        "SELECT floor_id 
+         FROM dungeon_floors
+         WHERE dungeon_id = :dungeon_id AND floor_number = 1"
     );
-    $stmt_progress->bindValue(':player_id', $_SESSION['player_id'], PDO::PARAM_INT);
-    $stmt_progress->bindValue(':dungeon_id', $dungeon_id, PDO::PARAM_INT);
-    $stmt_progress->execute();
-    $target_floor = $stmt_progress->fetch();
+    $stmt_first_floor->bindValue(':dungeon_id', $dungeon_id, PDO::PARAM_INT);
+    $stmt_first_floor->execute();
+    $target_floor = $stmt_first_floor->fetch();
 
     if ($target_floor) {
         $floor_id = $target_floor['floor_id'];
     } else {
-        exit('挑戦する階層の特定に失敗しました。');
+        exit('ダンジョンの1階層目の特定に失敗しました。');
     }
     
 } else {
