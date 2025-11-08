@@ -3,12 +3,10 @@
 // --------------------------------------------------
 // データベース接続情報
 // --------------------------------------------------
-// ★★★ 以下の4つの項目を、あなたがメモしたものに書き換えてください ★★★
-define('DB_HOST', 'mysql327.phy.lolipop.lan'); // ① データベースホスト
-define('DB_HOST', 'mysql327.phy.lolipop.lan'); // ① データベースホスト
-define('DB_NAME', 'LAA1529361-cheychip');   // ② データベース名
-define('DB_USER', 'LAA1529361');               // ③ ユーザー名
-define('DB_PASS', 'ログイン時のやつ');          // ④ パスワード
+define('DB_HOST', 'mysql327.phy.lolipop.lan'); // ※重複していた行を削除
+define('DB_NAME', 'LAA1529361-cheychip');
+define('DB_USER', 'LAA1529361');
+define('DB_PASS', 'nohomeruLOMLOM12'); // ※必ず書き換えてください
 
 // --------------------------------------------------
 // データベースに接続するための関数

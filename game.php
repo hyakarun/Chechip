@@ -16,16 +16,78 @@ try {
 
     if (!$player) { exit('プレイヤー情報が取得できませんでした。'); }
 
-    // --- ATKとDEFをリアルタイムで算出 ---
-    $atk = $player['strength'];
-    $def = $player['vitality'];
+    // --- 装備スロットの定義 ---
+    $all_slots = [
+        'right_hand' => '右手', 'left_hand' => '左手', 'head_top' => '頭上段', 'head_middle' => '頭中断',
+        'head_bottom' => '頭下段', 'neck' => '首', 'body' => '体', 'arm' => '腕', 'waist' => '腰',
+        'leg' => '足', 'foot' => '靴', 'accessory1' => 'アクセサリー1', 'accessory2' => 'アクセサリー2'
+    ];
+
+    // --- ステータス計算と装備表示の準備 ---
+    $base_stats = [
+        'hp_max' => $player['hp_max'], 'strength' => $player['strength'], 'vitality' => $player['vitality'],
+        'intelligence' => $player['intelligence'], 'speed' => $player['speed'], 'luck' => $player['luck'], 'charisma' => $player['charisma']
+    ];
+    $bonus_stats = [
+        'atk' => 0, 'def' => 0, 'hp_max' => 0, 'strength' => 0, 'vitality' => 0, 
+        'intelligence' => 0, 'speed' => 0, 'luck' => 0, 'charisma' => 0
+    ];
+    $equipped_display = [];
+    foreach ($all_slots as $slot_key => $slot_name) {
+        $equipped_display[$slot_key] = 'なし';
+    }
+    $stmt_equipped = $pdo->prepare(
+        "SELECT pi.*, i.* FROM player_inventory pi
+         JOIN items i ON pi.item_id = i.id
+         WHERE pi.player_id = :player_id AND pi.is_equipped = 1"
+    );
+    $stmt_equipped->bindValue(':player_id', $_SESSION['player_id'], PDO::PARAM_INT);
+    $stmt_equipped->execute();
+    foreach ($stmt_equipped->fetchAll() as $item) {
+        $slot = $item['equip_slot'];
+        if (isset($equipped_display[$slot])) {
+            $equipped_display[$slot] = $item['name'];
+        }
+        $bonus_stats['atk'] += $item['base_atk'];
+        $bonus_stats['def'] += $item['base_def'];
+        $bonus_stats['hp_max'] += $item['guaranteed_hp_max'];
+        $bonus_stats['strength'] += $item['guaranteed_strength'];
+        $bonus_stats['vitality'] += $item['guaranteed_vitality'];
+        $bonus_stats['intelligence'] += $item['guaranteed_intelligence'];
+        $bonus_stats['speed'] += $item['guaranteed_speed'];
+        $bonus_stats['luck'] += $item['guaranteed_luck'];
+        $bonus_stats['charisma'] += $item['guaranteed_charisma'];
+        for ($i = 1; $i <= 5; $i++) {
+            $stat_name = $item['option_' . $i . '_stat'];
+            $stat_value = $item['option_' . $i . '_value'];
+            if ($stat_name && isset($bonus_stats[$stat_name])) {
+                $bonus_stats[$stat_name] += $stat_value;
+            }
+        }
+    }
+    $final_stats = $base_stats;
+    foreach ($bonus_stats as $key => $value) {
+        if (isset($final_stats[$key])) {
+            $final_stats[$key] += $value;
+        }
+    }
+    $player['hp_max'] = $final_stats['hp_max'];
+    $player['strength'] = $final_stats['strength'];
+    $player['vitality'] = $final_stats['vitality'];
+    $player['intelligence'] = $final_stats['intelligence'];
+    $player['speed'] = $final_stats['speed'];
+    $player['luck'] = $final_stats['luck'];
+    $player['charisma'] = $final_stats['charisma'];
+    $atk = floor($player['strength'] / 4) + $bonus_stats['atk']; 
+    $div_def = $bonus_stats['def']; 
+    $sub_def = floor($player['vitality'] / 8); 
 
     // (オフライン回復処理)
     $current_time = new DateTime();
     $last_update_time = new DateTime($player['last_updated_at']);
     $elapsed_seconds = $current_time->getTimestamp() - $last_update_time->getTimestamp();
     $elapsed_minutes = floor($elapsed_seconds / 60);
-    if ($elapsed_minutes > 0 && $player['hp'] < $player['hp_max']) {
+    if ($elapsed_minutes > 0 && $player['hp'] < $player['hp_max'] && $player['hp'] > 1) {
         $recover_per_minute = max(1, floor($player['hp_max'] * 0.01));
         $total_recovery = min($player['hp_max'], $player['hp'] + ($recover_per_minute * $elapsed_minutes));
         $stmt_hp = $pdo->prepare("UPDATE players SET hp = :hp WHERE player_id = :player_id");
@@ -42,9 +104,19 @@ try {
     $next_level_exp = $stmt_exp->fetchColumn();
     if ($next_level_exp === false) { $next_level_exp = 'MAX'; }
     
-    // --- ダンジョンリストを取得 ---
-    $dungeons_stmt = $pdo->query("SELECT * FROM dungeons WHERE is_unlocked = 1 ORDER BY id");
+    // --- ▼▼▼ ダンジョンリスト取得ロジック (修正) ▼▼▼ ---
+    // プレイヤーが解放している「ダンジョン名」と「そのダンジョンの最高到達階」を取得
+    $dungeons_stmt = $pdo->prepare(
+        "SELECT d.id, d.name, p.highest_floor
+         FROM dungeons d
+         JOIN player_progress p ON d.id = p.dungeon_id
+         WHERE p.player_id = :player_id
+         ORDER BY d.id"
+    );
+    $dungeons_stmt->bindValue(':player_id', $_SESSION['player_id'], PDO::PARAM_INT);
+    $dungeons_stmt->execute();
     $dungeons = $dungeons_stmt->fetchAll();
+    // --- ▲▲▲ ロジック修正ここまで ▲▲▲ ---
 
     // --- レベルに応じた画像を取得 ---
     $stmt_avatar = $pdo->prepare(
@@ -74,32 +146,45 @@ foreach ($player as $key => $value) { $player[$key] = htmlspecialchars((string)$
         .main-content { flex: 2; padding: 20px; }
         .sidebar { flex: 1; padding: 20px; background-color: #444; border-left: 1px solid #666; }
         h2 { border-bottom: 1px solid #555; padding-bottom: 10px; }
-
-        .profile-summary-container { display: flex; align-items: center; gap: 20px; margin-bottom: 20px; }
+        .profile-summary-container { display: flex; align-items: center; gap: 20px; margin-bottom: 0px; }
         .player-profile img { width: 128px; height: 128px; border: 2px solid #555; background-color: #ffffff; }
+        /* ▼▼▼ スプライトアニメーション用CSS ▼▼▼ */
+        #player-avatar {
+            width: 128px; 
+            height: 128px;
+            background-image: url('images/<?php echo htmlspecialchars($avatar_filename, ENT_QUOTES, 'UTF-8'); ?>');
+            animation: avatar-animation 1s steps(4) infinite;
+        }
+        @keyframes avatar-animation {
+            from { background-position: 0px 0; }
+            to { background-position: -512px 0; }
+        }
+        /* ▲▲▲ アニメーションCSSここまで ▲▲▲ */
         .player-summary { flex: 1; }
         .player-summary h2 { margin-top: 0; }
         .player-summary p { margin: 8px 0; }
         .hp-display { margin: 8px 0; }
         .hp-bar-outer { width: 100%; max-width: 300px; height: 15px; background-color: #111; border: 1px solid #555; border-radius: 4px; margin-top: 4px; }
         .hp-bar-inner { height: 100%; background-color: #32a852; border-radius: 3px; transition: width 0.5s; }
-        
-        .top-container { display: flex; gap: 20px; margin-bottom: 20px; }
+        .top-container { display: flex; gap: 20px; margin-bottom: 0px; }
         .status-box, .equipment-box { flex: 1; background-color: #282828; border: 1px solid #555; padding: 15px; }
         .skill-box { background-color: #282828; border: 1px solid #555; padding: 15px; }
         .status-list p, .equipment-list p { margin: 8px 0; }
         .sidebar a { display: block; margin-bottom: 10px; color: #8af; }
-        
         .adventure-form select, .adventure-form button { width: 100%; padding: 8px; margin-bottom: 10px; background-color: #555; color: #eee; border: 1px solid #666; border-radius: 4px; }
         .adventure-form button { cursor: pointer; font-weight: bold; }
         .adventure-form button:hover { background-color: #666; }
+        .box-header { display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #555; padding-bottom: 10px; }
+        .box-header h2 { border-bottom: none; padding-bottom: 0; margin: 0; }
+        .header-button { display: inline-block; background-color: #555; color: #eee; padding: 5px 10px; border-radius: 4px; text-decoration: none; font-size: 0.9em; }
+        .header-button:hover { background-color: #666; }
     </style>
 </head>
 <body>
     <div class="main-content">
         <div class="profile-summary-container">
             <div class="player-profile">
-                <img src="images/<?php echo htmlspecialchars($avatar_filename, ENT_QUOTES, 'UTF-8'); ?>" alt="キャラクター画像">
+                <div id="player-avatar"></div>
             </div>
             <div class="player-summary">
                 <h2><?php echo $player['name']; ?></h2>
@@ -123,7 +208,7 @@ foreach ($player as $key => $value) { $player[$key] = htmlspecialchars((string)$
                 <h2>ステータス</h2>
                 <div class="status-list">
                     <p>攻撃力: <?php echo $atk; ?></p>
-                    <p>防御力: <?php echo $def; ?></p>
+                    <p>防御力: <?php echo $div_def; ?> + <?php echo $sub_def; ?></p>
                     <p>力: <?php echo $player['strength']; ?></p>
                     <p>体力: <?php echo $player['vitality']; ?></p>
                     <p>賢さ: <?php echo $player['intelligence']; ?></p>
@@ -134,9 +219,14 @@ foreach ($player as $key => $value) { $player[$key] = htmlspecialchars((string)$
             </div>
 
             <div class="equipment-box">
-                <h2>装備</h2>
+                <div class="box-header"> 
+                    <h2>装備</h2>
+                    <a href="equipment.php" class="header-button">装備変更</a>
+                </div>
                 <div class="equipment-list">
-                    <p>右手: なし</p><p>左手: なし</p><p>頭上段: なし</p><p>頭中断: なし</p><p>頭下段: なし</p><p>首: なし</p><p>体: なし</p><p>腕: なし</p><p>腰: なし</p><p>足: なし</p><p>靴: なし</p><p>アクセサリー1: なし</p><p>アクセサリー2: なし</p>
+                    <?php foreach ($equipped_display as $slot_key => $item_name): ?>
+                        <p><?php echo htmlspecialchars($all_slots[$slot_key], ENT_QUOTES, 'UTF-8'); ?>: <?php echo htmlspecialchars($item_name, ENT_QUOTES, 'UTF-8'); ?></p>
+                    <?php endforeach; ?>
                 </div>
             </div>
         </div>
@@ -151,22 +241,26 @@ foreach ($player as $key => $value) { $player[$key] = htmlspecialchars((string)$
     <div class="sidebar">
         <h2>コンテンツ</h2>
         <form action="battle.php" method="post" class="adventure-form">
-            <select name="dungeon_id" required>
+            <select name="dungeon_id" required> 
                 <option value="" disabled selected>行き先を選択...</option>
                 <?php foreach ($dungeons as $dungeon): ?>
                     <option value="<?php echo $dungeon['id']; ?>">
-                        <?php echo htmlspecialchars($dungeon['name'], ENT_QUOTES, 'UTF-8'); ?>
+                        <?php echo htmlspecialchars($dungeon['name'], ENT_QUOTES, 'UTF-8'); ?> 
+                        (現在 <?php echo htmlspecialchars($dungeon['highest_floor'], ENT_QUOTES, 'UTF-8'); ?>F)
                     </option>
                 <?php endforeach; ?>
             </select>
             <button type="submit">冒険へ</button>
         </form>
         <hr>
+        <a href="shop.php">道具屋</a>
+        <a href="inventory.php">アイテム</a>
         <a href="news.php">お知らせ</a>
         <a href="#" id="inn-button">宿屋</a>
         <hr>
         <a href="logout.php">ログアウト</a>
     </div>
+
     <script>
         const currentHpEl = document.getElementById('current-hp');
         const maxHpEl = document.getElementById('max-hp');
@@ -176,19 +270,16 @@ foreach ($player as $key => $value) { $player[$key] = htmlspecialchars((string)$
             let currentHp = parseInt(currentHpEl.textContent);
             const maxHp = parseInt(maxHpEl.textContent);
             if (currentHp >= maxHp) return;
-
             let recoveryAmount = Math.max(1, Math.floor(maxHp * 0.01));
             currentHp = Math.min(maxHp, currentHp + recoveryAmount);
-
             currentHpEl.textContent = currentHp;
             const newWidth = (currentHp / maxHp) * 100;
             hpBarInner.style.width = newWidth + '%';
-
             const formData = new FormData();
             formData.append('hp', currentHp);
             fetch('update_hp.php', { method: 'POST', body: formData })
                 .catch(error => console.error('HPの保存に失敗:', error));
-        }, 60000);
+        }, 60000); 
 
         const innButton = document.getElementById('inn-button');
         innButton.addEventListener('click', (event) => {

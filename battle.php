@@ -7,59 +7,156 @@ if (!isset($_SESSION['player_id'])) {
     exit();
 }
 
-if (!isset($_SESSION['player_id']) || !isset($_POST['dungeon_id'])) {
-    header('Location: game.php'); // 行き先が未選択なら追い返す
+$pdo = connectDb(); // 先に接続
+
+// --- ▼▼▼ $floor_id 決定ロジック (10階層対応) ▼▼▼ ---
+if (isset($_POST['next_floor_id'])) {
+    // 「次の階層へ」ボタンから来た場合
+    $floor_id = (int)$_POST['next_floor_id'];
+
+} elseif (isset($_POST['dungeon_id'])) {
+    // game.phpのプルダウンから「dungeon_id」が送られてきた場合
+    $dungeon_id = (int)$_POST['dungeon_id'];
+    
+    // DBに接続して、プレイヤーがそのダンジョンで挑戦すべき「階層(floor_id)」を特定します
+    $stmt_progress = $pdo->prepare(
+        "SELECT f.floor_id 
+         FROM player_progress p
+         JOIN dungeon_floors f ON p.dungeon_id = f.dungeon_id AND p.highest_floor = f.floor_number
+         WHERE p.player_id = :player_id AND p.dungeon_id = :dungeon_id"
+    );
+    $stmt_progress->bindValue(':player_id', $_SESSION['player_id'], PDO::PARAM_INT);
+    $stmt_progress->bindValue(':dungeon_id', $dungeon_id, PDO::PARAM_INT);
+    $stmt_progress->execute();
+    $target_floor = $stmt_progress->fetch();
+
+    if ($target_floor) {
+        $floor_id = $target_floor['floor_id'];
+    } else {
+        exit('挑戦する階層の特定に失敗しました。');
+    }
+    
+} else {
+    header('Location: game.php'); 
     exit();
 }
+// --- ▲▲▲ ロジック修正ここまで ▲▲▲ ---
 
-$dungeon_id = (int)$_POST['dungeon_id'];
 
 // --- バトル準備 ---
-$pdo = connectDb();
 $stmt_player = $pdo->prepare("SELECT * FROM players WHERE player_id = :player_id");
 $stmt_player->bindValue(':player_id', $_SESSION['player_id'], PDO::PARAM_INT);
 $stmt_player->execute();
 $player = $stmt_player->fetch();
 $initial_player = $player;
 
-// ATK/DEFを算出
-$player_atk = $initial_player['strength'];
-$player_def = $initial_player['vitality'];
+// --- レベルに応じた画像を取得 ---
+$stmt_avatar = $pdo->prepare(
+    "SELECT avatar_filename FROM avatar_growth_table 
+     WHERE level <= :player_level 
+     ORDER BY level DESC 
+     LIMIT 1"
+);
+$stmt_avatar->bindValue(':player_level', $initial_player['level'], PDO::PARAM_INT);
+$stmt_avatar->execute();
+$avatar_filename = $stmt_avatar->fetchColumn();
+if ($avatar_filename === false) {
+    $avatar_filename = 'default_avatar.png';
+}
+$initial_player['avatar_filename'] = $avatar_filename;
+$player['avatar_filename'] = $avatar_filename;
 
-// --- ダンジョンに出現するモンスターをランダムで1体選出 ---
-$monsters_in_dungeon_stmt = $pdo->prepare("SELECT monster_id FROM dungeon_monsters WHERE dungeon_id = :dungeon_id");
-$monsters_in_dungeon_stmt->bindValue(':dungeon_id', $dungeon_id, PDO::PARAM_INT);
-$monsters_in_dungeon_stmt->execute();
-$possible_monster_ids = $monsters_in_dungeon_stmt->fetchAll(PDO::FETCH_COLUMN);
+// ATK/DEFを算出 (装備込みのステータス計算)
+$base_stats = [
+    'hp_max' => $player['hp_max'], 'strength' => $player['strength'], 'vitality' => $player['vitality'],
+    'intelligence' => $player['intelligence'], 'speed' => $player['speed'], 'luck' => $player['luck'], 'charisma' => $player['charisma']
+];
+$bonus_stats = [
+    'atk' => 0, 'def' => 0, 'hp_max' => 0, 'strength' => 0, 'vitality' => 0, 
+    'intelligence' => 0, 'speed' => 0, 'luck' => 0, 'charisma' => 0
+];
+$stmt_equipped = $pdo->prepare(
+    "SELECT pi.*, i.* FROM player_inventory pi
+     JOIN items i ON pi.item_id = i.id
+     WHERE pi.player_id = :player_id AND pi.is_equipped = 1"
+);
+$stmt_equipped->bindValue(':player_id', $_SESSION['player_id'], PDO::PARAM_INT);
+$stmt_equipped->execute();
+foreach ($stmt_equipped->fetchAll() as $item) {
+    $bonus_stats['atk'] += $item['base_atk'];
+    $bonus_stats['def'] += $item['base_def'];
+    $bonus_stats['hp_max'] += $item['guaranteed_hp_max'];
+    $bonus_stats['strength'] += $item['guaranteed_strength'];
+    $bonus_stats['vitality'] += $item['guaranteed_vitality'];
+    $bonus_stats['intelligence'] += $item['guaranteed_intelligence'];
+    $bonus_stats['speed'] += $item['guaranteed_speed'];
+    $bonus_stats['luck'] += $item['guaranteed_luck'];
+    $bonus_stats['charisma'] += $item['guaranteed_charisma'];
+    for ($i = 1; $i <= 5; $i++) {
+        $stat_name = $item['option_' . $i . '_stat'];
+        $stat_value = $item['option_' . $i . '_value'];
+        if ($stat_name && isset($bonus_stats[$stat_name])) {
+            $bonus_stats[$stat_name] += $stat_value;
+        }
+    }
+}
+$final_stats = $base_stats;
+foreach ($bonus_stats as $key => $value) {
+    if (isset($final_stats[$key])) {
+        $final_stats[$key] += $value;
+    }
+}
+$player_atk = floor($final_stats['strength'] / 4) + $bonus_stats['atk'];
+$player_div_def = $bonus_stats['def']; 
+$player_sub_def = floor($final_stats['vitality'] / 8); 
 
-if (empty($possible_monster_ids)) {
-    exit('このダンジョンにはモンスターがいません。');
+// --- 階層に出現するモンスターをランダムで1体選出 ---
+
+// 1. (追加) まず、現在の $floor_id からダンジョンIDを取得します
+$dungeon_id_stmt = $pdo->prepare("SELECT dungeon_id FROM dungeon_floors WHERE floor_id = :floor_id");
+$dungeon_id_stmt->bindValue(':floor_id', $floor_id, PDO::PARAM_INT);
+$dungeon_id_stmt->execute();
+$current_dungeon_id = $dungeon_id_stmt->fetchColumn();
+
+if (!$current_dungeon_id) {
+    exit('ダンジョンIDの取得に失敗しました。');
 }
 
-// 出現するモンスターをランダムに決定
+// 2. (修正) 次に、取得したダンジョンIDを使って floor_monsters を検索します
+$monsters_in_floor_stmt = $pdo->prepare("SELECT monster_id FROM floor_monsters WHERE dungeon_id = :dungeon_id");
+$monsters_in_floor_stmt->bindValue(':dungeon_id', $current_dungeon_id, PDO::PARAM_INT);
+$monsters_in_floor_stmt->execute();
+$possible_monster_ids = $monsters_in_floor_stmt->fetchAll(PDO::FETCH_COLUMN);
+// (以下略)
+
+if (empty($possible_monster_ids)) {
+    exit('この階層にはモンスターがいません。');
+}
 $random_key = array_rand($possible_monster_ids);
 $selected_monster_id = $possible_monster_ids[$random_key];
-
-// 選ばれたモンスターのステータスを取得
-$monster_stmt = $pdo->prepare("SELECT * FROM monsters WHERE id = :monster_id");
-$monster_stmt->bindValue(':monster_id', $selected_monster_id, PDO::PARAM_INT);
+$monster_stmt = $pdo->prepare("SELECT * FROM monsters WHERE id = :id");
+$monster_stmt->bindValue(':id', $selected_monster_id, PDO::PARAM_INT);
 $monster_stmt->execute();
 $monster_data = $monster_stmt->fetch();
 
-$enemy_raw = [
+
+// --- ▼▼▼ モンスター情報取得 (最重要) ▼▼▼ ---
+$enemy = [
+    'id' => $monster_data['id'],
     'name' => $monster_data['name'],
     'hp' => $monster_data['hp'],
-    'hp_max' => $monster_data['hp'],
-    'str' => $monster_data['strength'],
-    'vit' => $monster_data['vitality'],
-    'exp' => $monster_data['exp'],
-    'gold' => $monster_data['gold'],
-    'image' => $monster_data['image']
+    'hp_max' => $monster_data['hp'], 
+    'exp' => $monster_data['exp'],     // ★ expカラムから取得
+    'gold' => $monster_data['gold'],    // ★ goldカラムから取得
+    'image' => $monster_data['image']  // ★ imageカラムから取得
 ];
+$enemy_atk = floor($monster_data['strength'] / 4) + $monster_data['atk'];
+$enemy_def = $monster_data['def']; 
 
-$enemy_atk = $enemy_raw['str'];
-$enemy_def = $enemy_raw['vit'];
-$enemy = $enemy_raw;
+// --- ▲▲▲ モンスター情報取得ここまで ▲▲▲ ---
+
+
+
 $battle_flow = [];
 $turn = 1;
 
@@ -67,17 +164,45 @@ $turn = 1;
 $player_current_hp = $initial_player['hp'];
 $enemy_current_hp = $enemy['hp'];
 while ($player_current_hp > 0 && $enemy_current_hp > 0) {
-    // 表示用のHPを更新
     $player['hp'] = $player_current_hp;
     $enemy['hp'] = $enemy_current_hp;
     $battle_flow[] = [ 'type' => 'snapshot', 'turn' => $turn, 'player' => $player, 'enemy' => $enemy ];
-    $damage_to_enemy = max(0, $player_atk - $enemy_def);
+
+    // プレイヤーの攻撃
+    $base_damage_to_enemy = $player_atk - $enemy_def;
+    $random_factor_enemy = mt_rand(90, 110) / 100; 
+    $randomized_damage_enemy = $base_damage_to_enemy * $random_factor_enemy;
+    if ($player_atk > 0) {
+        $damage_to_enemy = max(1, floor($randomized_damage_enemy));
+    } else {
+        $damage_to_enemy = 0;
+    }
+    $damage_to_enemy = min($damage_to_enemy, 9999); 
+
     $enemy_current_hp -= $damage_to_enemy;
     $battle_flow[] = [ 'type' => 'action', 'actor' => $player, 'text' => $player['name'] . 'は' . $enemy['name'] . 'を攻撃した！ ' . $damage_to_enemy . 'のダメージ。' ];
-    if ($enemy_current_hp <= 0) break;
-    $damage_to_player = max(0, $enemy_atk - $player_def);
+    
+    if ($enemy_current_hp <= 0) break; 
+
+    // モンスターの反撃
+    $defense_factor = 500; 
+    $denominator = $defense_factor + $player_div_def;
+    if ($denominator <= 0) { $denominator = 1; }
+    $divided_damage = $enemy_atk * ($defense_factor / $denominator);
+    $calculated_damage = $divided_damage - $player_sub_def;
+    $random_factor_player = mt_rand(90, 110) / 100;
+    $randomized_damage_player = $calculated_damage * $random_factor_player;
+
+    if ($enemy_atk > 0) {
+        $damage_to_player = max(1, floor($randomized_damage_player));
+    } else {
+        $damage_to_player = 0;
+    }
+    $damage_to_player = min($damage_to_player, 9999);
+
     $player_current_hp -= $damage_to_player;
     $battle_flow[] = [ 'type' => 'action', 'actor' => $enemy, 'text' => $enemy['name'] . 'が反撃！ ' . $player['name'] . 'に' . $damage_to_player . 'のダメージ。' ];
+    
     $turn++;
 }
 
@@ -85,19 +210,135 @@ while ($player_current_hp > 0 && $enemy_current_hp > 0) {
 $final_player_hp = $player_current_hp;
 $final_enemy_hp = $enemy_current_hp;
 $final_player_image = $initial_player['avatar_filename'];
-$final_enemy_image = $enemy['image'];
+$final_enemy_image = $enemy['image']; // ★ $enemy 配列から画像を取得
+
+$next_floor_info = null; 
+$battle_log = []; 
 
 if ($player_current_hp > 0) {
     $result_message = "勝利した！";
-    $battle_log = [];
+    // --- ▼▼▼ 経験値・ゴールド表示 (最重要) ▼▼▼ ---
     $battle_log[] = $enemy['name'] . 'を倒した！';
-    $battle_log[] = $enemy['exp'] . 'の経験値を獲得！';
-    $battle_log[] = $enemy['gold'] . 'Gを獲得！';
+    $battle_log[] = $enemy['exp'] . 'の経験値を獲得！'; // ★ $enemy 配列から取得
+    $battle_log[] = $enemy['gold'] . 'Gを獲得！';     // ★ $enemy 配列から取得
+    // --- ▲▲▲ ここまで ▲▲▲ ---
 
+    // --- 階層クリア処理 (10階層対応) ---
+    $floor_info_stmt = $pdo->prepare("SELECT * FROM dungeon_floors WHERE floor_id = :floor_id");
+    $floor_info_stmt->bindValue(':floor_id', $floor_id, PDO::PARAM_INT);
+    $floor_info_stmt->execute();
+    $floor_info = $floor_info_stmt->fetch();
+    
+    $reward_item_id = $floor_info['completion_reward_item_id'];
+    $reward_gold = $floor_info['completion_reward_gold'];
+    $unlocked_dungeon_id = $floor_info['unlocks_dungeon_id']; 
+    $current_dungeon_id = $floor_info['dungeon_id'];
+    $current_floor_number = $floor_info['floor_number'];
+    
+    $progress_stmt = $pdo->prepare("SELECT highest_floor FROM player_progress WHERE player_id = :player_id AND dungeon_id = :dungeon_id");
+    $progress_stmt->bindValue(':player_id', $_SESSION['player_id'], PDO::PARAM_INT);
+    $progress_stmt->bindValue(':dungeon_id', $current_dungeon_id, PDO::PARAM_INT);
+    $progress_stmt->execute();
+    $highest_floor = $progress_stmt->fetchColumn();
+
+    $next_floor_number = $current_floor_number + 1;
+    $next_floor_stmt = $pdo->prepare(
+        "SELECT f.floor_id, d.name 
+         FROM dungeon_floors f 
+         JOIN dungeons d ON f.dungeon_id = d.id 
+         WHERE f.dungeon_id = :dungeon_id AND f.floor_number = :next_floor"
+    );
+    $next_floor_stmt->bindValue(':dungeon_id', $current_dungeon_id, PDO::PARAM_INT);
+    $next_floor_stmt->bindValue(':next_floor', $next_floor_number, PDO::PARAM_INT);
+    $next_floor_stmt->execute();
+    $next_floor_info = $next_floor_stmt->fetch(); 
+
+    if ($highest_floor == $current_floor_number) {
+        
+        if ($next_floor_info) {
+            // --- 次の階層がある場合 (例: 1F → 2F) ---
+            $update_progress_stmt = $pdo->prepare(
+                "UPDATE player_progress SET highest_floor = :next_floor 
+                 WHERE player_id = :player_id AND dungeon_id = :dungeon_id"
+            );
+            $update_progress_stmt->bindValue(':next_floor', $next_floor_number, PDO::PARAM_INT);
+            $update_progress_stmt->bindValue(':player_id', $_SESSION['player_id'], PDO::PARAM_INT);
+            $update_progress_stmt->bindValue(':dungeon_id', $current_dungeon_id, PDO::PARAM_INT);
+            $update_progress_stmt->execute();
+            
+            $battle_log[] = '--------------------------------';
+            $battle_log[] = '「' . htmlspecialchars($next_floor_info['name'], ENT_QUOTES, 'UTF-8') . ' ' . $next_floor_number . 'F」が解放された！';
+            $battle_log[] = '--------------------------------';
+        
+        } elseif ($unlocked_dungeon_id) {
+            // --- 最終階層 (10F) クリアで、次のダンジョンが解放される場合 ---
+            $check_next_dungeon_stmt = $pdo->prepare("SELECT 1 FROM player_progress WHERE player_id = :player_id AND dungeon_id = :dungeon_id");
+            $check_next_dungeon_stmt->bindValue(':player_id', $_SESSION['player_id'], PDO::PARAM_INT);
+            $check_next_dungeon_stmt->bindValue(':dungeon_id', $unlocked_dungeon_id, PDO::PARAM_INT);
+            $check_next_dungeon_stmt->execute();
+            
+            if (!$check_next_dungeon_stmt->fetch()) {
+                $unlock_stmt = $pdo->prepare("INSERT INTO player_progress (player_id, dungeon_id, highest_floor) VALUES (:player_id, :dungeon_id, 1)");
+                $unlock_stmt->bindValue(':player_id', $_SESSION['player_id'], PDO::PARAM_INT);
+                $unlock_stmt->bindValue(':dungeon_id', $unlocked_dungeon_id, PDO::PARAM_INT);
+                $unlock_stmt->execute();
+
+                $next_dungeon_name_stmt = $pdo->prepare("SELECT name FROM dungeons WHERE id = :id");
+                $next_dungeon_name_stmt->bindValue(':id', $unlocked_dungeon_id, PDO::PARAM_INT);
+                $next_dungeon_name_stmt->execute();
+                $next_dungeon_name = $next_dungeon_name_stmt->fetchColumn();
+
+                $battle_log[] = '--------------------------------';
+                $battle_log[] = 'ダンジョンクリア！';
+                $battle_log[] = '新しいダンジョン「' . htmlspecialchars($next_dungeon_name, ENT_QUOTES, 'UTF-8') . '」が解放された！';
+                $battle_log[] = '--------------------------------';
+            }
+        }
+    }
+
+    // --- アイテムドロップ処理 ---
+    $drop_stmt = $pdo->prepare("SELECT * FROM monster_drops WHERE monster_id = :monster_id");
+    $drop_stmt->bindValue(':monster_id', $monster_data['id'], PDO::PARAM_INT);
+    $drop_stmt->execute();
+    $possible_drops = $drop_stmt->fetchAll();
+    foreach ($possible_drops as $drop) {
+        $roll = rand(1, 100);
+        if ($roll <= ($drop['drop_chance'] * 100)) {
+            $item_id = $drop['item_id'];
+            $item_template_stmt = $pdo->prepare("SELECT * FROM items WHERE id = :item_id");
+            $item_template_stmt->bindValue(':item_id', $item_id, PDO::PARAM_INT);
+            $item_template_stmt->execute();
+            $item_template = $item_template_stmt->fetch();
+            if ($item_template) {
+                $options_to_generate = rand($item_template['random_option_min_count'], $item_template['random_option_max_count']);
+                $generated_options = [];
+                $possible_stats = ['hp_max', 'strength', 'vitality', 'intelligence', 'speed', 'luck', 'charisma', 'atk', 'def'];
+                for ($i = 0; $i < $options_to_generate; $i++) {
+                    $random_stat_key = array_rand($possible_stats);
+                    $stat_name = $possible_stats[$random_stat_key];
+                    $stat_value = rand(1, 5);
+                    $generated_options[] = ['stat' => $stat_name, 'value' => $stat_value];
+                }
+                $sql = "INSERT INTO player_inventory (player_id, item_id, option_1_stat, option_1_value, option_2_stat, option_2_value, option_3_stat, option_3_value, option_4_stat, option_4_value, option_5_stat, option_5_value) 
+                        VALUES (:player_id, :item_id, :o1s, :o1v, :o2s, :o2v, :o3s, :o3v, :o4s, :o4v, :o5s, :o5v)";
+                $add_item_stmt = $pdo->prepare($sql);
+                $params = [
+                    ':player_id' => $_SESSION['player_id'], ':item_id' => $item_id,
+                    ':o1s' => $generated_options[0]['stat'] ?? NULL, ':o1v' => $generated_options[0]['value'] ?? NULL,
+                    ':o2s' => $generated_options[1]['stat'] ?? NULL, ':o2v' => $generated_options[1]['value'] ?? NULL,
+                    ':o3s' => $generated_options[2]['stat'] ?? NULL, ':o3v' => $generated_options[2]['value'] ?? NULL,
+                    ':o4s' => $generated_options[3]['stat'] ?? NULL, ':o4v' => $generated_options[3]['value'] ?? NULL,
+                    ':o5s' => $generated_options[4]['stat'] ?? NULL, ':o5v' => $generated_options[4]['value'] ?? NULL,
+                ];
+                $add_item_stmt->execute($params);
+                $battle_log[] = $item_template['name'] . 'を手に入れた！';
+            }
+        }
+    }
+    
     // --- 報酬とレベルアップ処理 ---
     $new_exp = $initial_player['exp'] + $enemy['exp'];
     $new_gold = $initial_player['gold'] + $enemy['gold'];
-    
     $stmt_exp = $pdo->prepare("SELECT required_exp FROM experience_table WHERE level = :next_level");
     $stmt_exp->bindValue(':next_level', $initial_player['level'] + 1, PDO::PARAM_INT);
     $stmt_exp->execute();
@@ -109,7 +350,6 @@ if ($player_current_hp > 0) {
         $stmt_status->bindValue(':new_level', $new_level, PDO::PARAM_INT);
         $stmt_status->execute();
         $new_stats = $stmt_status->fetch();
-        
         if ($new_stats) {
             $final_hp_after_levelup = $new_stats['hp_max']; 
             $stmt_update = $pdo->prepare(
@@ -131,14 +371,15 @@ if ($player_current_hp > 0) {
             $battle_log[] = 'レベルアップ！ レベル' . $new_level . 'になった！';
             $battle_log[] = 'ステータスが成長した！';
             $battle_log[] = '--------------------------------';
-            
             $final_player_hp = $final_hp_after_levelup;
+        } else {
+            $stmt_update = $pdo->prepare("UPDATE players SET exp = :exp, gold = :gold, hp = :hp WHERE player_id = :player_id");
+            $stmt_update->bindValue(':hp', $player_current_hp, PDO::PARAM_INT);
         }
     } else {
         $stmt_update = $pdo->prepare("UPDATE players SET exp = :exp, gold = :gold, hp = :hp WHERE player_id = :player_id");
         $stmt_update->bindValue(':hp', $player_current_hp, PDO::PARAM_INT);
     }
-
     $stmt_update->bindValue(':exp', $new_exp, PDO::PARAM_INT);
     $stmt_update->bindValue(':gold', $new_gold, PDO::PARAM_INT);
     $stmt_update->bindValue(':player_id', $_SESSION['player_id'], PDO::PARAM_INT);
@@ -146,12 +387,9 @@ if ($player_current_hp > 0) {
 
 } else {
     $result_message = "敗北した...";
-
-    // 敗北時はHPを1にして保存する（0だと回復できないため）
     $stmt_defeat = $pdo->prepare("UPDATE players SET hp = 1 WHERE player_id = :player_id");
     $stmt_defeat->bindValue(':player_id', $_SESSION['player_id'], PDO::PARAM_INT);
     $stmt_defeat->execute();
-
 }
 ?>
 <!DOCTYPE html>
@@ -178,7 +416,6 @@ if ($player_current_hp > 0) {
         .action-log p { margin: 0; }
         .result-area { text-align: center; margin-top: 30px; }
         a { color: #8af; }
-
         .battle-final-snapshot { display: flex; justify-content: space-around; padding: 20px; margin-bottom: 20px; background-color: #2e2e2e; border: 1px solid #555; align-items: flex-start; }
         .battle-final-snapshot .character-info { flex-direction: column; align-items: center; }
         .battle-final-snapshot .character-info img { width: 96px; height: 96px; margin-bottom: 10px; object-fit: contain; }
@@ -186,6 +423,8 @@ if ($player_current_hp > 0) {
         .battle-final-snapshot .character-info p { font-size: 1em; margin: 5px 0; }
         .battle-final-snapshot .vs-text { font-size: 1.5em; align-self: center; padding: 0 20px; }
         .dead-character-image { filter: grayscale(100%) brightness(50%); opacity: 0.7; }
+        .result-area form { display: inline; }
+        .result-area button { padding: 10px 20px; font-size: 1em; }
     </style>
 </head>
 <body>
@@ -258,7 +497,21 @@ if ($player_current_hp > 0) {
             <?php foreach ($battle_log as $log): ?>
                 <p><?php echo htmlspecialchars($log, ENT_QUOTES, 'UTF-8'); ?></p>
             <?php endforeach; ?>
-            <a href="game.php">冒険者の家に戻る</a>
+            
+            <hr>
+            
+            <?php if ($player_current_hp > 0 && $next_floor_info): ?>
+                
+                <form action="battle.php" method="post">
+                    <input type="hidden" name="next_floor_id" value="<?php echo $next_floor_info['floor_id']; ?>">
+                    <button type="submit">次の階層へ (<?php echo htmlspecialchars($next_floor_info['name'], ENT_QUOTES, 'UTF-8') . ' ' . ($current_floor_number + 1) . 'F'; ?>)</button>
+                </form>
+                
+                <a href="game.php"><button type="button">ホームに戻る</button></a> 
+            <?php else: ?>
+                <a href="game.php"><button type="button">ホームに戻る</button></a> 
+            <?php endif; ?>
+            
         </div>
     </div>
 </body>
