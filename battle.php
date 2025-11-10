@@ -122,6 +122,7 @@ if (!$current_dungeon_id) {
 }
 
 // 2. (修正) 次に、取得したダンジョンIDを使って floor_monsters を検索します
+// (★ファイル名が間違っていたので修正: admin_monsters.php -> floor_monsters)
 $monsters_in_floor_stmt = $pdo->prepare("SELECT monster_id FROM floor_monsters WHERE dungeon_id = :dungeon_id");
 $monsters_in_floor_stmt->bindValue(':dungeon_id', $current_dungeon_id, PDO::PARAM_INT);
 $monsters_in_floor_stmt->execute();
@@ -148,6 +149,7 @@ $enemy = [
     'exp' => $monster_data['exp'],
     'gold' => $monster_data['gold'],
     'image' => $monster_data['image']
+    // (★ base_drop_rate は $monster_data['base_drop_rate'] に入っている)
 ];
 $enemy_atk = $monster_data['strength'] + $monster_data['atk'];
 $enemy_def = $monster_data['def']; 
@@ -308,45 +310,99 @@ if ($player_current_hp > 0) {
         }
     }
 
-    // --- アイテムドロップ処理 ---
-    $drop_stmt = $pdo->prepare("SELECT * FROM monster_drops WHERE monster_id = :monster_id");
-    $drop_stmt->bindValue(':monster_id', $monster_data['id'], PDO::PARAM_INT);
-    $drop_stmt->execute();
-    $possible_drops = $drop_stmt->fetchAll();
-    foreach ($possible_drops as $drop) {
-        $roll = rand(1, 100);
-        if ($roll <= ($drop['drop_chance'] * 100)) {
-            $item_id = $drop['item_id'];
-            $item_template_stmt = $pdo->prepare("SELECT * FROM items WHERE id = :item_id");
-            $item_template_stmt->bindValue(':item_id', $item_id, PDO::PARAM_INT);
-            $item_template_stmt->execute();
-            $item_template = $item_template_stmt->fetch();
-            if ($item_template) {
-                $options_to_generate = rand($item_template['random_option_min_count'], $item_template['random_option_max_count']);
-                $generated_options = [];
-                $possible_stats = ['hp_max', 'strength', 'vitality', 'intelligence', 'speed', 'luck', 'charisma', 'atk', 'def'];
-                for ($i = 0; $i < $options_to_generate; $i++) {
-                    $random_stat_key = array_rand($possible_stats);
-                    $stat_name = $possible_stats[$random_stat_key];
-                    $stat_value = rand(1, 5);
-                    $generated_options[] = ['stat' => $stat_name, 'value' => $stat_value];
+    // --- ▼▼▼ アイテムドロップ処理 (★ 修正: 2段階抽選ロジック) ▼▼▼ ---
+    
+    // (この $monster_data は L.234 あたりで取得済み)
+    // (monstersテーブルに "base_drop_rate" (0.2, 0.5 等) カラムが追加されている前提)
+    $base_drop_rate = $monster_data['base_drop_rate'] ?? 0.0; // 例: 0.2 (20%)
+
+    // 1. 0.000... から 1.000... までのランダムな小数を1回だけ生成
+    $roll_stage1 = mt_rand() / mt_getrandmax(); 
+
+    // === 第1抽選: 「ドロップするかどうか」 ===
+    if ($roll_stage1 <= $base_drop_rate) {
+        
+        // 当選！ 第2抽選に進む
+        $drop_stmt = $pdo->prepare("SELECT item_id, drop_chance FROM monster_drops WHERE monster_id = :monster_id");
+        $drop_stmt->bindValue(':monster_id', $monster_data['id'], PDO::PARAM_INT);
+        $drop_stmt->execute();
+        $possible_drops = $drop_stmt->fetchAll();
+
+        if (empty($possible_drops)) {
+            // (ドロップはするはずだったが、候補が設定されていなかった)
+        } else {
+
+            // === 第2抽選: 「何をドロップするか」 (重み付け抽選) ===
+            $total_weight = 0;
+            $weighted_list = [];
+            foreach ($possible_drops as $drop) {
+                // (drop_chance は 20, 30, 50 などの「重み」)
+                $weight = (float)$drop['drop_chance']; 
+                if ($weight > 0) {
+                    $total_weight += $weight;
+                    $weighted_list[$drop['item_id']] = $weight;
                 }
-                $sql = "INSERT INTO player_inventory (player_id, item_id, option_1_stat, option_1_value, option_2_stat, option_2_value, option_3_stat, option_3_value, option_4_stat, option_4_value, option_5_stat, option_5_value) 
-                        VALUES (:player_id, :item_id, :o1s, :o1v, :o2s, :o2v, :o3s, :o3v, :o4s, :o4v, :o5s, :o5v)";
-                $add_item_stmt = $pdo->prepare($sql);
-                $params = [
-                    ':player_id' => $_SESSION['player_id'], ':item_id' => $item_id,
-                    ':o1s' => $generated_options[0]['stat'] ?? NULL, ':o1v' => $generated_options[0]['value'] ?? NULL,
-                    ':o2s' => $generated_options[1]['stat'] ?? NULL, ':o2v' => $generated_options[1]['value'] ?? NULL,
-                    ':o3s' => $generated_options[2]['stat'] ?? NULL, ':o3v' => $generated_options[2]['value'] ?? NULL,
-                    ':o4s' => $generated_options[3]['stat'] ?? NULL, ':o4v' => $generated_options[3]['value'] ?? NULL,
-                    ':o5s' => $generated_options[4]['stat'] ?? NULL, ':o5v' => $generated_options[4]['value'] ?? NULL,
-                ];
-                $add_item_stmt->execute($params);
-                $battle_log[] = $item_template['name'] . 'を手に入れた！';
+            }
+
+            if ($total_weight > 0) {
+                
+                // 重みに基づいて抽選 (例: 1 から $total_weight (100) までの乱数)
+                $roll_stage2 = mt_rand(1, (int)$total_weight);
+                $cumulative_weight = 0;
+                $dropped_item_id = null;
+
+                foreach ($weighted_list as $item_id => $weight) {
+                    $cumulative_weight += $weight;
+                    if ($roll_stage2 <= $cumulative_weight) {
+                        $dropped_item_id = $item_id;
+                        break; // (★重要) 1つドロップしたら、すぐにループを抜ける
+                    }
+                }
+
+                // (ドロップ処理)
+                if ($dropped_item_id !== null) {
+                    
+                    // --- ▼ (ここから下は、元のドロップ処理 L.333-361 とほぼ同じ) ---
+                    $item_id = $dropped_item_id;
+                    $item_template_stmt = $pdo->prepare("SELECT * FROM items WHERE id = :item_id");
+                    $item_template_stmt->bindValue(':item_id', $item_id, PDO::PARAM_INT);
+                    $item_template_stmt->execute();
+                    $item_template = $item_template_stmt->fetch();
+                    
+                    if ($item_template) {
+                        $options_to_generate = rand($item_template['random_option_min_count'], $item_template['random_option_max_count']);
+                        $generated_options = [];
+                        $possible_stats = ['hp_max', 'strength', 'vitality', 'intelligence', 'speed', 'luck', 'charisma', 'atk', 'def'];
+                        for ($i = 0; $i < $options_to_generate; $i++) {
+                            $random_stat_key = array_rand($possible_stats);
+                            $stat_name = $possible_stats[$random_stat_key];
+                            $stat_value = rand(1, 5);
+                            $generated_options[] = ['stat' => $stat_name, 'value' => $stat_value];
+                        }
+                        $sql = "INSERT INTO player_inventory (player_id, item_id, option_1_stat, option_1_value, option_2_stat, option_2_value, option_3_stat, option_3_value, option_4_stat, option_4_value, option_5_stat, option_5_value) 
+                                VALUES (:player_id, :item_id, :o1s, :o1v, :o2s, :o2v, :o3s, :o3v, :o4s, :o4v, :o5s, :o5v)";
+                        $add_item_stmt = $pdo->prepare($sql);
+                        $params = [
+                            ':player_id' => $_SESSION['player_id'], ':item_id' => $item_id,
+                            ':o1s' => $generated_options[0]['stat'] ?? NULL, ':o1v' => $generated_options[0]['value'] ?? NULL,
+                            ':o2s' => $generated_options[1]['stat'] ?? NULL, ':o2v' => $generated_options[1]['value'] ?? NULL,
+                            ':o3s' => $generated_options[2]['stat'] ?? NULL, ':o3v' => $generated_options[2]['value'] ?? NULL,
+                            ':o4s' => $generated_options[3]['stat'] ?? NULL, ':o4v' => $generated_options[3]['value'] ?? NULL,
+                            ':o5s' => $generated_options[4]['stat'] ?? NULL, ':o5v' => $generated_options[4]['value'] ?? NULL,
+                        ];
+                        $add_item_stmt->execute($params);
+                        $battle_log[] = $item_template['name'] . 'を手に入れた！';
+                    }
+                    // --- ▲ (元のドロップ処理ここまで) ---
+                }
             }
         }
+        
     }
+    // (もし $roll_stage1 が $base_drop_rate よりも大きかった場合、何もドロップせずに終了します)
+    
+    // --- ▲▲▲ アイテムドロップ処理ここまで ▲▲▲ ---
+
     
     // --- 報酬とレベルアップ処理 ---
     $new_exp = $initial_player['exp'] + $enemy['exp'];
@@ -464,7 +520,7 @@ if ($player_current_hp > 0) {
                              <img src="images/<?php echo htmlspecialchars($e['image'], ENT_QUOTES, 'UTF-8'); ?>" alt="<?php echo $e['name']; ?>">
                             <div class="stats">
                                 <p><?php echo htmlspecialchars($e['name'], ENT_QUOTES, 'UTF-8'); ?></p>
-                                <div class="hp-bar-outer"><div class="hp-bar-inner" style="width: <?php echo $hp_percent_e; ?>%;"></div></div>
+                                <div class="hp-bar-outer"><div class="hp-bar-inner" style="width: <?Cphp echo $hp_percent_e; ?>%;"></div></div>
                             </div>
                         </div>
                     </div>

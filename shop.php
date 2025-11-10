@@ -6,33 +6,58 @@ if (!isset($_SESSION['player_id'])) {
 }
 
 require_once(__DIR__ . '/db_connect.php');
-$pdo = connectDb();
 $player_id = $_SESSION['player_id'];
 
-// プレイヤーの所持金を取得
-$stmt_player = $pdo->prepare("SELECT gold FROM players WHERE player_id = :player_id");
-$stmt_player->bindValue(':player_id', $player_id, PDO::PARAM_INT);
-$stmt_player->execute();
-$player_gold = $stmt_player->fetchColumn();
+// equipment.php と同じスロット定義
+$all_slots_map = [
+    'right_hand' => '右手', 'left_hand' => '左手', 'head_top' => '頭上段', 'head_middle' => '頭中断',
+    'head_bottom' => '頭下段', 'neck' => '首', 'body' => '体', 'arm' => '腕', 'waist' => '腰',
+    'leg' => '足', 'foot' => '靴', 'accessory1' => 'アクセサリー1', 'accessory2' => 'アクセサリー2'
+];
 
-// 1. 販売リスト (buy_price > 0 のアイテム) を取得
-$stmt_shop = $pdo->query("SELECT * FROM items WHERE buy_price > 0 ORDER BY id");
-$shop_items = $stmt_shop->fetchAll();
+$items_for_sale = [];
+$player_gold = 0;
 
-// 2. プレイヤーの所持品 (売却用) を取得
-$stmt_inventory = $pdo->prepare(
-    "SELECT pi.inventory_id, i.name, i.buy_price
-     FROM player_inventory pi
-     JOIN items i ON pi.item_id = i.id
-     WHERE pi.player_id = :player_id AND pi.is_equipped = 0" // 装備していないもののみ
-);
-$stmt_inventory->bindValue(':player_id', $player_id, PDO::PARAM_INT);
-$stmt_inventory->execute();
-$inventory_items = $stmt_inventory->fetchAll();
+try {
+    $pdo = connectDb();
+    
+    // 1. プレイヤーの所持金を取得
+    $stmt_player = $pdo->prepare("SELECT gold FROM players WHERE player_id = :player_id");
+    $stmt_player->bindValue(':player_id', $player_id, PDO::PARAM_INT);
+    $stmt_player->execute();
+    $player_gold = $stmt_player->fetchColumn();
 
-// 売却価格は買値の半額（切り捨て）
-function getSellPrice($buy_price) {
-    return floor($buy_price / 2);
+    // 2. 「各スロットで最も価格が安い(＝弱い) 4件」を取得するSQL
+    // (CTEとWindow関数を使用)
+    $sql = "
+        WITH RankedItems AS (
+            SELECT 
+                id, name, equip_slot, buy_price,
+                ROW_NUMBER() OVER(
+                    PARTITION BY equip_slot 
+                    ORDER BY buy_price ASC, id ASC
+                ) AS rank_in_slot
+            FROM items
+            WHERE 
+                type = 'equipment' AND 
+                buy_price > 0 -- 価格が設定されているもののみ
+        )
+        SELECT id, name, equip_slot, buy_price
+        FROM RankedItems
+        WHERE rank_in_slot <= 4
+        ORDER BY 
+            -- スロットマップの順序で並び替える
+            FIELD(equip_slot, 
+                  'right_hand', 'left_hand', 'head_top', 'head_middle', 'head_bottom', 
+                  'neck', 'body', 'arm', 'waist', 'leg', 'foot', 
+                  'accessory1', 'accessory2'), 
+            buy_price;
+    ";
+    
+    $items_for_sale = $pdo->query($sql)->fetchAll();
+
+} catch (PDOException $e) {
+    exit('データベースエラー: ' . $e->getMessage());
 }
 ?>
 <!DOCTYPE html>
@@ -42,65 +67,92 @@ function getSellPrice($buy_price) {
     <title>道具屋</title>
     <style>
         body { background-color: #333; color: #eee; font-family: sans-serif; }
-        .container { max-width: 1000px; margin: 40px auto; padding: 20px; background-color: #282828; border: 1px solid #555; }
-        h1, h2 { border-bottom: 1px solid #555; padding-bottom: 10px; }
+        .container { max-width: 900px; margin: 40px auto; padding: 20px; background-color: #282828; border: 1px solid #555; }
+        h1 { border-bottom: 1px solid #555; padding-bottom: 10px; }
+        .gold-display { text-align: right; font-size: 1.2em; margin-bottom: 20px; }
         .back-link { display: inline-block; margin-top: 30px; color: #eee; }
-        .shop-container { display: flex; gap: 30px; }
-        .buy-section, .sell-section { flex: 1; }
-        table { width: 100%; border-collapse: collapse; margin-top: 15px; }
-        th, td { border: 1px solid #555; padding: 8px; text-align: left; }
-        th { background-color: #444; }
-        .gold-display { font-size: 1.2em; font-weight: bold; }
+        
+        /* ▼▼▼ (ここから) 陳列棚のスタイル ▼▼▼ */
+        .slot-group { margin-bottom: 30px; }
+        .slot-group h2 { 
+            background-color: #444; 
+            padding: 10px; 
+            border-bottom: 2px solid #666; 
+            margin-top: 0;
+        }
+        
+        .item-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 10px 15px;
+            border-bottom: 1px solid #444;
+        }
+        .item-row:nth-child(even) { background-color: #303030; }
+        
+        .item-name { flex: 3; font-size: 1.1em; }
+        .item-price { flex: 2; text-align: right; padding-right: 20px; }
+        .item-buy-form { flex: 1; text-align: right; }
+        .item-buy-form button {
+            padding: 8px 15px;
+            background-color: #007bff;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+        }
+        .item-buy-form button:hover { background-color: #0056b3; }
+        .item-buy-form button:disabled {
+            background-color: #555;
+            cursor: not-allowed;
+        }
+        /* ▲▲▲ (ここまで) 陳列棚のスタイル ▲▲▲ */
     </style>
 </head>
 <body>
     <div class="container">
         <h1>道具屋</h1>
-        <p class="gold-display">所持金: <?php echo htmlspecialchars($player_gold, ENT_QUOTES, 'UTF-8'); ?>G</p>
-        
-        <div class="shop-container">
-            <div class="buy-section">
-                <h2>商品を買う</h2>
-                <table>
-                    <tr><th>商品名</th><th>価格</th><th></th></tr>
-                    <?php foreach ($shop_items as $item): ?>
-                    <tr>
-                        <td><?php echo htmlspecialchars($item['name'], ENT_QUOTES, 'UTF-8'); ?></td>
-                        <td><?php echo $item['buy_price']; ?>G</td>
-                        <td>
-                            <form action="buy_item.php" method="post">
-                                <input type="hidden" name="item_id" value="<?php echo $item['id']; ?>">
-                                <button type="submit">買う</button>
-                            </form>
-                        </td>
-                    </tr>
-                    <?php endforeach; ?>
-                </table>
-            </div>
+        <div class="gold-display">所持金: <?php echo htmlspecialchars($player_gold, ENT_QUOTES, 'UTF-8'); ?> G</div>
+        <hr>
 
-            <div class="sell-section">
-                <h2>持ち物を売る</h2>
-                <table>
-                    <tr><th>アイテム名</th><th>売値</th><th></th></tr>
-                    <?php if (empty($inventory_items)): ?>
-                        <tr><td colspan="3">売れるアイテムがありません。</td></tr>
-                    <?php else: ?>
-                        <?php foreach ($inventory_items as $item): ?>
-                        <tr>
-                            <td><?php echo htmlspecialchars($item['name'], ENT_QUOTES, 'UTF-8'); ?></td>
-                            <td><?php echo getSellPrice($item['buy_price']); ?>G</td>
-                            <td>
-                                <form action="sell_item.php" method="post">
-                                    <input type="hidden" name="inventory_id" value="<?php echo $item['inventory_id']; ?>">
-                                    <button type="submit">売る</button>
-                                </form>
-                            </td>
-                        </tr>
-                        <?php endforeach; ?>
-                    <?php endif; ?>
-                </table>
+        <?php 
+        $current_slot = null;
+        foreach ($items_for_sale as $item): 
+            // ▼ スロットが変わったら、新しい見出し (h2) を表示する
+            if ($item['equip_slot'] !== $current_slot):
+                // (前のグループの </div> を閉じる)
+                if ($current_slot !== null) echo '</div>'; 
+                
+                $current_slot = $item['equip_slot'];
+                $slot_name = $all_slots_map[$current_slot] ?? $current_slot;
+        ?>
+        <div class="slot-group">
+            <h2><?php echo htmlspecialchars($slot_name, ENT_QUOTES, 'UTF-8'); ?></h2>
+        <?php 
+            endif; 
+        ?>
+            
+            <div class="item-row">
+                <span class="item-name"><?php echo htmlspecialchars($item['name'], ENT_QUOTES, 'UTF-8'); ?></span>
+                <span class="item-price"><?php echo htmlspecialchars($item['buy_price'], ENT_QUOTES, 'UTF-8'); ?> G</span>
+                <div class="item-buy-form">
+                    <form action="buy_item.php" method="post">
+                        <input type="hidden" name="item_id" value="<?php echo $item['id']; ?>">
+                        <button type="submit" 
+                            <?php echo ($player_gold < $item['buy_price']) ? 'disabled' : ''; ?>
+                        >
+                            <?php echo ($player_gold < $item['buy_price']) ? '所持金不足' : '購入'; ?>
+                        </button>
+                    </form>
+                </div>
             </div>
-        </div>
+        
+        <?php 
+        endforeach;
+        // 最後のグループの </div> を閉じる
+        if ($current_slot !== null) echo '</div>'; 
+        ?>
+
         <hr>
         <a href="game.php" class="back-link">ゲームに戻る</a>
     </div>

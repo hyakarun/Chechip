@@ -21,16 +21,22 @@ $luck = (int)$_POST['luck'];
 $charisma = (int)$_POST['charisma'];
 $gold = (int)$_POST['gold'];
 $image = $_POST['image']; // 画像ファイル名
-// --- ▲▲▲ ここまで ▲▲▲ ---
+
+// ▼▼▼ ここから変更 ▼▼▼
+// フォームから % で受け取り、DBには 0.XX の小数で保存
+$base_drop_rate = (float)$_POST['base_drop_rate'] / 100.0; 
+// ▲▲▲ ここまで変更 ▲▲▲
 
 try {
     $pdo = connectDb();
     
     // --- ▼▼▼ INSERT文を monsters テーブル用に書き換える ▼▼▼ ---
     $sql = "INSERT INTO monsters 
-                (name, level, exp, hp, atk, def, strength, vitality, intelligence, speed, luck, charisma, gold, image) 
+                (name, level, exp, hp, atk, def, strength, vitality, intelligence, speed, luck, charisma, gold, 
+                 base_drop_rate, image) 
             VALUES 
-                (:name, :level, :exp, :hp, :atk, :def, :strength, :vitality, :intelligence, :speed, :luck, :charisma, :gold, :image)";
+                (:name, :level, :exp, :hp, :atk, :def, :strength, :vitality, :intelligence, :speed, :luck, :charisma, :gold, 
+                 :base_drop_rate, :image)"; // (★ base_drop_rate を追加)
     
     $stmt = $pdo->prepare($sql);
     
@@ -47,10 +53,15 @@ try {
     $stmt->bindValue(':luck', $luck, PDO::PARAM_INT);
     $stmt->bindValue(':charisma', $charisma, PDO::PARAM_INT);
     $stmt->bindValue(':gold', $gold, PDO::PARAM_INT);
+    
+    // ▼▼▼ ここから変更 ▼▼▼
+    $stmt->bindValue(':base_drop_rate', $base_drop_rate, PDO::PARAM_STR); // (小数なのでSTR)
+    // ▲▲▲ ここまで変更 ▲▲▲
+
     $stmt->bindValue(':image', $image, PDO::PARAM_STR);
     
     $stmt->execute();
-    // --- ▲▲▲ ここまで ▲▲▲ ---
+    // --- ▲▲▲ ここまで ▲▲▲
 
 } catch (PDOException $e) {
     exit('データベースエラー: ' :. $e->getMessage());
@@ -58,3 +69,5 @@ try {
 
 // ★ 完了したらモンスター管理ページに戻る
 header('Location: admin_monsters.php');
+exit();
+?>

@@ -10,6 +10,7 @@ require_once(__DIR__ . '/../db_connect.php'); // 階層が違うのでパスを�
 try {
     $pdo = connectDb();
     // ★ 取得するテーブルを news から monsters に変更
+    // (★ base_drop_rate も取得)
     $stmt = $pdo->query("SELECT * FROM monsters ORDER BY id ASC");
     $monsters_list = $stmt->fetchAll();
 } catch (PDOException $e) {
@@ -91,6 +92,12 @@ try {
             <label for="gold">Gold:</label>
             <input type="number" name="gold" value="5" required>
         </div>
+        
+        <div class="form-group">
+            <label for="base_drop_rate">基本ドロップ率(%):</label>
+            <input type="number" name="base_drop_rate" value="20" min="0" max="100" step="0.1" required> %
+            <small>(例: 雑魚=20%, ボス=50%)</small>
+        </div>
         <div class="form-group">
             <label for="image">画像:</label>
             <input type="text" name="image" size="30" placeholder="slime.png">
@@ -108,7 +115,7 @@ try {
             <th>HP</th>
             <th>EXP</th>
             <th>Gold</th>
-            <th>画像</th>
+            <th>基本ドロップ率</th> <th>画像</th>
             <th>操作</th>
         </tr>
         <?php foreach ($monsters_list as $monster): ?>
@@ -119,6 +126,7 @@ try {
             <td><?php echo htmlspecialchars($monster['hp'], ENT_QUOTES, 'UTF-8'); ?></td>
             <td><?php echo htmlspecialchars($monster['exp'], ENT_QUOTES, 'UTF-8'); ?></td>
             <td><?php echo htmlspecialchars($monster['gold'], ENT_QUOTES, 'UTF-8'); ?></td>
+            <td><?php echo ($monster['base_drop_rate'] * 100); ?>%</td>
             <td><?php echo htmlspecialchars($monster['image'], ENT_QUOTES, 'UTF-8'); ?></td>
             <td>
                 (編集) (削除)

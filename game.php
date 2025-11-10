@@ -90,8 +90,7 @@ try {
     if ($elapsed_minutes > 0 && $player['hp'] < $player['hp_max'] && $player['hp'] > 1) {
         $recover_per_minute = max(1, floor($player['hp_max'] * 0.01));
         $total_recovery = min($player['hp_max'], $player['hp'] + ($recover_per_minute * $elapsed_minutes));
-        $stmt_hp = $pdo->prepare("UPDATE players SET hp = :hp WHERE player_id = :player_id");
-        $stmt_hp->bindValue(':hp', $total_recovery, PDO::PARAM_INT);
+        $stmt_hp = $pdo->prepare("UPDATE players SET hp = :hp, last_updated_at = NOW() WHERE player_id = :player_id");        $stmt_hp->bindValue(':hp', $total_recovery, PDO::PARAM_INT);
         $stmt_hp->bindValue(':player_id', $_SESSION['player_id'], PDO::PARAM_INT);
         $stmt_hp->execute();
         $player['hp'] = $total_recovery;

@@ -36,6 +36,10 @@ try {
 <head>
     <meta charset="UTF-8">
     <title>アイテムドロップ管理</title>
+    
+    <link href="https://cdn.jsdelivr.net/npm/select2@4.1.0-rc.0/dist/css/select2.min.css" rel="stylesheet" />
+    <script src="https://code.jquery.com/jquery-3.7.1.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/select2@4.1.0-rc.0/dist/js/select2.min.js"></script>
     <style>
         body { font-family: sans-serif; }
         .container { max-width: 900px; margin: 20px auto; }
@@ -46,6 +50,16 @@ try {
         th { background-color: #f4f4f4; }
         .delete-form { display: inline; }
         .delete-form button { padding: 3px 8px; }
+
+        .batch-form-container { display: flex; justify-content: space-between; gap: 20px; }
+        .batch-form-container .select-box { flex: 1; }
+        .batch-form-container .select-box label { font-weight: bold; }
+        .batch-form-container .select-box small { display: block; margin-top: 5px; color: #555; }
+        .batch-form-container .config-box { width: 200px; }
+        
+        .select2-container {
+            width: 100% !important; 
+        }
     </style>
 </head>
 <body>
@@ -59,35 +73,45 @@ try {
         </p>
         <hr>
 
-        <h2>新しいドロップを設定</h2>
+        <h2>新しいドロップを一括登録</h2>
+        
         <form action="admin_handle_drop.php" method="post">
-            <p>
-                <label for="monster_id">モンスター:</label>
-                <select id="monster_id" name="monster_id" required>
-                    <option value="" disabled selected>-- モンスターを選択 --</option>
-                    <?php foreach ($monsters as $monster): ?>
-                        <option value="<?php echo $monster['id']; ?>">
-                            (Lv<?php echo $monster['level']; ?>) <?php echo htmlspecialchars($monster['name'], ENT_QUOTES, 'UTF-8'); ?>
-                        </option>
-                    <?php endforeach; ?>
-                </select>
-            </p>
-            <p>
-                <label for="item_id">アイテム:</label>
-                <select id="item_id" name="item_id" required>
-                    <option value="" disabled selected>-- アイテムを選択 --</option>
-                    <?php foreach ($items as $item): ?>
-                        <option value="<?php echo $item['id']; ?>"><?php echo htmlspecialchars($item['name'], ENT_QUOTES, 'UTF-8'); ?></option>
-                    <?php endforeach; ?>
-                </select>
-            </p>
-            <p>
-                <label for="drop_chance">ドロップ率 (%):</label>
-                <input type="number" id="drop_chance" name="drop_chance" min="0.01" max="100" step="0.01" value="10.0" required>
-                <span>%</span>
-                <small>(例: 10% や 0.5% など)</small>
-            </p>
-            <button type="submit">ドロップ設定を追加</button>
+            <div class="batch-form-container">
+                
+                <div class="select-box">
+                    <label for="monster_id">1. モンスターを選択 (複数可)</label>
+                    <select id="monster_id" name="monster_id[]" multiple required class="select2-multiple">
+                        <?php foreach ($monsters as $monster): ?>
+                            <option value="<?php echo $monster['id']; ?>">
+                                (Lv<?php echo $monster['level']; ?>) <?php echo htmlspecialchars($monster['name'], ENT_QUOTES, 'UTF-8'); ?>
+                            </option>
+                        <?php endforeach; ?>
+                    </select>
+                    <small>文字入力で検索できます。選んだ項目はタグとして蓄積されます。</small>
+                </div>
+
+                <div class="select-box">
+                    <label for="item_id">2. アイテムを選択 (複数可)</label>
+                    <select id="item_id" name="item_id[]" multiple required class="select2-multiple">
+                        <?php foreach ($items as $item): ?>
+                            <option value="<?php echo $item['id']; ?>"><?php echo htmlspecialchars($item['name'], ENT_QUOTES, 'UTF-8'); ?></option>
+                        <?php endforeach; ?>
+                    </select>
+                    <small>文字入力で検索できます。選んだ項目はタグとして蓄積されます。</small>
+                </div>
+
+                <div class="config-box">
+                    <p>
+                        <label for="drop_chance" style="font-weight: bold;">3. ドロップの「重み」:</label>
+                        <input type="number" id="drop_chance" name="drop_chance" min="1" step="1" value="10" required style="width: 100px;">
+                        <small>(例: 武器=20, 鎧=30, 盾=50 のように、相対的な確率の「重み」を入力。%ではありません)</small>
+                        </p>
+                    <button type="submit" style="padding: 10px 20px; font-weight: bold; width: 100%;">
+                        上記の内容で一括登録
+                    </button>
+                </div>
+
+            </div>
         </form>
 
         <hr>
@@ -96,15 +120,13 @@ try {
             <tr>
                 <th>モンスター</th>
                 <th>ドロップアイテム</th>
-                <th>ドロップ率</th>
-                <th>操作</th>
+                <th>ドロップの「重み」</th> <th>操作</th>
             </tr>
             <?php foreach ($current_drops as $drop): ?>
             <tr>
                 <td><?php echo htmlspecialchars($drop['monster_name'], ENT_QUOTES, 'UTF-8'); ?></td>
                 <td><?php echo htmlspecialchars($drop['item_name'], ENT_QUOTES, 'UTF-8'); ?></td>
-                <td><?php echo ($drop['drop_chance'] * 100); // 0.2 -> 20% にして表示 ?>%</td>
-                <td>
+                <td><?php echo htmlspecialchars($drop['drop_chance'], ENT_QUOTES, 'UTF-8'); ?></td> <td>
                     <form action="admin_delete_drop.php" method="post" class="delete-form" onsubmit="return confirm('このドロップ設定を削除しますか？');">
                         <input type="hidden" name="id" value="<?php echo $drop['id']; ?>">
                         <button type="submit">削除</button>
@@ -114,5 +136,15 @@ try {
             <?php endforeach; ?>
         </table>
     </div>
-</body>
+
+    <script>
+        $(document).ready(function() {
+            // "select2-multiple" というクラスを持つすべてのselectタグを、Select2 UIに置き換える
+            $('.select2-multiple').select2({
+                placeholder: "クリックして検索・選択...", // 何も選択されていない時の表示
+                allowClear: true
+            });
+        });
+    </script>
+    </body>
 </html>
