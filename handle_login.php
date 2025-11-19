@@ -3,7 +3,9 @@ session_start(); // セッションを開始
 require_once(__DIR__ . '/db_connect.php'); // DB接続
 
 // フォームからデータを受け取る
-$name = $_POST['name'];
+// ▼▼▼ (修正) 'name' ではなく 'username' で受け取る ▼▼▼
+$name = $_POST['username'];
+// ▲▲▲ (修正) ▲▲▲
 $password = $_POST['password'];
 
 try {
@@ -31,3 +33,4 @@ try {
 } catch (PDOException $e) {
     exit('データベースエラー: ' . $e->getMessage());
 }
+?>

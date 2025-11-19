@@ -30,33 +30,68 @@ try {
     $item = $stmt->fetch(PDO::FETCH_ASSOC);
 
     if ($item) {
-// --- アイテム情報を整理 ---
+        // --- アイテム情報を整理 ---
         $details['name'] = $item['name'];
-        $details['options'] = []; // 配列として初期化
+        $details['options'] = []; // 表示用テキスト配列
 
-        // 1. 基本性能 (確定オプションとして扱う)
-        if ($item['base_atk'] > 0) $details['options'][] = ['type' => 'guaranteed', 'text' => "基本ATK: +" . $item['base_atk']];
-        if ($item['base_def'] > 0) $details['options'][] = ['type' => 'guaranteed', 'text' => "基本DEF: +" . $item['base_def']];
+        // --- ★追加: 比較計算用の数値データ配列 ---
+        $stats = [
+            'atk' => 0, 'def' => 0, 'hp_max' => 0,
+            'strength' => 0, 'vitality' => 0, 'intelligence' => 0,
+            'speed' => 0, 'luck' => 0, 'charisma' => 0
+        ];
+
+        // 1. 基本性能
+        if ($item['base_atk'] > 0) {
+            $details['options'][] = ['type' => 'guaranteed', 'text' => "基本ATK: +" . $item['base_atk']];
+            $stats['atk'] += $item['base_atk'];
+        }
+        if ($item['base_def'] > 0) {
+            $details['options'][] = ['type' => 'guaranteed', 'text' => "基本DEF: +" . $item['base_def']];
+            $stats['def'] += $item['base_def'];
+        }
         
         // 2. 確定オプション
-        if ($item['guaranteed_hp_max'] > 0) $details['options'][] = ['type' => 'guaranteed', 'text' => "最大HP: +" . $item['guaranteed_hp_max']];
-        if ($item['guaranteed_strength'] > 0) $details['options'][] = ['type' => 'guaranteed', 'text' => "力: +" . $item['guaranteed_strength']];
-        if ($item['guaranteed_vitality'] > 0) $details['options'][] = ['type' => 'guaranteed', 'text' => "体力: +" . $item['guaranteed_vitality']];
-        if ($item['guaranteed_intelligence'] > 0) $details['options'][] = ['type' => 'guaranteed', 'text' => "賢さ: +" . $item['guaranteed_intelligence']];
-        if ($item['guaranteed_speed'] > 0) $details['options'][] = ['type' => 'guaranteed', 'text' => "素早さ: +" . $item['guaranteed_speed']];
-        if ($item['guaranteed_luck'] > 0) $details['options'][] = ['type' => 'guaranteed', 'text' => "運: +" . $item['guaranteed_luck']];
-        if ($item['guaranteed_charisma'] > 0) $details['options'][] = ['type' => 'guaranteed', 'text' => "かっこよさ: +" . $item['guaranteed_charisma']];
+        $guaranteed_map = [
+            'guaranteed_hp_max' => ['stat' => 'hp_max', 'label' => '最大HP'],
+            'guaranteed_strength' => ['stat' => 'strength', 'label' => '力'],
+            'guaranteed_vitality' => ['stat' => 'vitality', 'label' => '体力'],
+            'guaranteed_intelligence' => ['stat' => 'intelligence', 'label' => '賢さ'],
+            'guaranteed_speed' => ['stat' => 'speed', 'label' => '素早さ'],
+            'guaranteed_luck' => ['stat' => 'luck', 'label' => '運'],
+            'guaranteed_charisma' => ['stat' => 'charisma', 'label' => 'かっこよさ'],
+        ];
 
-        // 3. 不定オプション
+        foreach ($guaranteed_map as $db_col => $info) {
+            if ($item[$db_col] > 0) {
+                $details['options'][] = ['type' => 'guaranteed', 'text' => $info['label'] . ": +" . $item[$db_col]];
+                $stats[$info['stat']] += $item[$db_col];
+            }
+        }
+
+        // 3. 不定オプション (ランダム付与)
+        // stat名の日本語変換マップ
+        $stat_labels = [
+            'hp_max' => '最大HP', 'strength' => '力', 'vitality' => '体力',
+            'intelligence' => '賢さ', 'speed' => '素早さ', 'luck' => '運',
+            'charisma' => 'かっこよさ', 'atk' => 'ATK', 'def' => 'DEF'
+        ];
+
         for ($i = 1; $i <= 5; $i++) {
             $stat_name = $item['option_' . $i . '_stat'];
             $stat_value = $item['option_' . $i . '_value'];
-            if ($stat_name) {
-                // $stat_name を日本語に変換（任意）
-                $jp_stat_name = $stat_name; // TODO: 必要ならここで日本語に変換
+            if ($stat_name && $stat_value) {
+                $jp_stat_name = $stat_labels[$stat_name] ?? $stat_name;
                 $details['options'][] = ['type' => 'random', 'text' => "ランダム: " . $jp_stat_name . " +" . $stat_value];
+                
+                if (isset($stats[$stat_name])) {
+                    $stats[$stat_name] += $stat_value;
+                }
             }
         }
+
+        // 数値データをレスポンスに追加
+        $details['stats'] = $stats;
         
     } else {
         $details['error'] = "アイテムが見つかりません。";

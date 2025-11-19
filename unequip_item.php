@@ -13,10 +13,10 @@ $inventory_id_to_unequip = (int)$_GET['inventory_id'];
 try {
     $pdo = connectDb();
     
-    // 指定されたアイテムの装備を外す (is_equipped = 0 にする)
+    // 装備を外し、equipped_slot も NULL にする
     $stmt = $pdo->prepare(
         "UPDATE player_inventory
-         SET is_equipped = 0
+         SET is_equipped = 0, equipped_slot = NULL
          WHERE player_id = :player_id AND inventory_id = :inventory_id"
     );
     $stmt->bindValue(':player_id', $player_id, PDO::PARAM_INT);
@@ -27,6 +27,6 @@ try {
     exit('データベースエラー: ' . $e->getMessage());
 }
 
-// 装備画面に戻る
 header('Location: equipment.php');
 exit();
+?>

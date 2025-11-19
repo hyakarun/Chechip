@@ -64,7 +64,7 @@ try {
     // --- ▲▲▲ ここまで ▲▲▲
 
 } catch (PDOException $e) {
-    exit('データベースエラー: ' :. $e->getMessage());
+    exit('データベースエラー: ' . $e->getMessage());
 }
 
 // ★ 完了したらモンスター管理ページに戻る

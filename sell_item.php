@@ -12,9 +12,9 @@ try {
     $pdo = connectDb();
     $pdo->beginTransaction();
 
-    // 1. 売ろうとしているアイテムが本当に存在するか、買値はいくらかを取得
+    // 1. 売ろうとしているアイテムが本当に存在するか、買値はいくらか、数量はいくらかを取得
     $stmt_item = $pdo->prepare(
-        "SELECT i.buy_price FROM player_inventory pi
+        "SELECT i.buy_price, pi.quantity FROM player_inventory pi
          JOIN items i ON pi.item_id = i.id
          WHERE pi.player_id = :player_id AND pi.inventory_id = :inventory_id AND pi.is_equipped = 0"
     );
@@ -24,12 +24,22 @@ try {
     $item_info = $stmt_item->fetch();
 
     // 2. アイテムが存在し、売却可能（買値が設定されている）か
-    if ($item_info) {
-        // 3. アイテムをインベントリから削除
-        $stmt_delete = $pdo->prepare("DELETE FROM player_inventory WHERE inventory_id = :inventory_id AND player_id = :player_id");
-        $stmt_delete->bindValue(':inventory_id', $inventory_id, PDO::PARAM_INT);
-        $stmt_delete->bindValue(':player_id', $player_id, PDO::PARAM_INT);
-        $stmt_delete->execute();
+    if ($item_info && $item_info['buy_price'] > 0) {
+        
+        // 3. 売却処理 (数量の増減)
+        if ($item_info['quantity'] > 1) {
+            // スタックアイテムの場合: 数量を減らす
+            $stmt_update = $pdo->prepare("UPDATE player_inventory SET quantity = quantity - 1 WHERE inventory_id = :inventory_id AND player_id = :player_id");
+            $stmt_update->bindValue(':inventory_id', $inventory_id, PDO::PARAM_INT);
+            $stmt_update->bindValue(':player_id', $player_id, PDO::PARAM_INT);
+            $stmt_update->execute();
+        } else {
+            // 単品アイテムの場合: 削除する
+            $stmt_delete = $pdo->prepare("DELETE FROM player_inventory WHERE inventory_id = :inventory_id AND player_id = :player_id");
+            $stmt_delete->bindValue(':inventory_id', $inventory_id, PDO::PARAM_INT);
+            $stmt_delete->bindValue(':player_id', $player_id, PDO::PARAM_INT);
+            $stmt_delete->execute();
+        }
         
         // 4. 売却額（買値の半額・切り捨て）を計算
         $sell_price = floor($item_info['buy_price'] / 2);
@@ -42,7 +52,7 @@ try {
         
         $pdo->commit();
     } else {
-        // 装備中のアイテム、または存在しないアイテムを売ろうとした
+        // 装備中のアイテム、または非売品を売ろうとした
         $pdo->rollBack();
     }
 
@@ -51,5 +61,6 @@ try {
     exit('データベースエラー: ' . $e->getMessage());
 }
 
-header('Location: shop.php');
+header('Location: shop.php?mode=sell'); // 売却後に売却画面に戻る
 exit();
+?>
